@@ -1,3 +1,7 @@
+This is the Operating System Development (OSD) from  Chris Giese see  http://devel.archefire.org/mirrors/my.execpc.com/~geezer/osd/index.htm for more information.
+================================================================
+Original README notice follows
+
 OSD demo code - Interim release (January, 2003)
 
 I am working a new set of kernels, but it's slow going, so here
