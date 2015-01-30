@@ -1,0 +1,348 @@
+==============================================================================
+Intro:
+------
+
+Il s'agit de donner une vague idee de la maniere dont on peut realiser
+un systeme d'exploitation.
+Ceci est presente en cinq etapes ; la derniere etant un embryon de
+systeme multitache ecrit en C++.
+
+Le code est specifique a une machine de type PC equipee d'un processeur
+i80386 ou superieur.
+
+Le chargement de ce code peut avoir lieu depuis un lecteur de disquettes,
+un disque dur ou un cdrom. A l'origine, le BIOS ne sait exploiter que les
+disquettes et les disques durs. Le demarrage sur cdrom avec les BIOS actuels
+consiste alors a le substituer a un lecteur de disquettes ou a un disque dur
+(specifications el-torito). Dans ce dernier cas, l'image de la disquette
+ou du disque dur est reutilisee telle quelle lors de la fabrication de l'image
+du cdrom.
+
+Les outils necessaires sont :
+  - le langage assembleur NASM,
+  - l'emulateur QEMU pour eviter d'avoir a ecrire une disquette ou un cdrom
+    et demarrer une vraie machine a chaque essai,
+  - l'environnement de developpement gcc/g++.
+
+nb: bien que l'utilisation de l'assembleur soit ici indispensable, la vocation
+    de ces exemples n'est pas l'enseignement de ce langage ni meme des
+    principes generaux de fonctionnement des processeurs (qui sont censes
+    etre connus).
+
+Quelques liens :
+  - Un tres bon point de depart pour les recherches sur le sujet
+      http://my.execpc.com/~geezer/osd/index.htm
+  - L'emulateur QEMU (portable, tres souple, incontournable !)
+      http://fabrice.bellard.free.fr/qemu/
+  - L'assembleur NASM (multi-plateforme, tres clair)
+      http://nasm.sourceforge.net/doc/html/nasmdoc0.html
+
+==============================================================================
+Boot_0:
+-------
+
+Il s'agit ici de voir comment le PC demarre et en arrive a executer
+du code qu'on lui fournit.
+
+Lorsqu'il est mis sous tension, le processeur demarre en mode ``reel''
+c'est a dire qu'il utilise une paire [segment:offset] (2*16 bits) pour
+acceder a la memoire sans aucune restriction (droit acces ...).
+La notation [segment:offset] revient a designer l'adresse lineaire
+[16*segment+offset] ; ceci est du au respect de la compatibilite avec
+les processeurs de type i8088, i8086 et i80286 qui ne disposaient que
+de registres de 16 bits. Un simple registre de 16 bits ne permettant
+d'adresser que 64 KO, l'utilisation de l'adressage [segment:offset] permet
+d'atteindre 1MO (ce qui semblait enorme a l'epoque). Ce type d'adressage
+se comprend donc comme : acceder librement avec l'offset a une zone de
+64 KO designee par 16*segment. Il existe plusieurs registres de segment
+dont : le segment de code, de donnees, de pile.
+
+Au demarrage donc, l'execution demarre a l'adresse [F000:FFF0], c'est a
+dire que le segment de code designe l'adresse 16*0xF000 et le pointeur
+programme designe l'adresse 0xFFF0 a l'interieur de ce segment (l'adresse
+lineaire est donc 0x000FFFF0). Cette adresse constitue le point d'entree
+du code du BIOS qui se trouve en memoire morte de [F000:0000] a [F000:FFFF].
+L'execution de ce code commence par initialiser la machine.
+Lors de l'initialisation, la table des vecteurs d'interruption est renseignee,
+ainsi que les variables reservees aux fonctionnement du BIOS, puis le
+``Power On Self Test'' a lieu. L'espace d'adressage est alors configure
+comme suit :
+  [0000:0000]
+              Table des vecteurs d'interruption (256 paires [segment:offset])
+  [0040:0000]
+              Variables du BIOS (eventuellement un peu au dela)
+  [0040:0071]
+              ... (environ 29 KO libres)
+  [07C0:0000]
+              Copie du secteur de boot
+  [07C0:01FF]
+              ... (environ 608 KO libres)
+  [A000:0000]
+              Memoire video (mode graphique 320*200*256 en [A000:0000])
+  [B000:0000]
+              Memoire video (mode texte 80*25*16 en [B800:0000])
+  [C000:0000]
+              Diverses extensions (bios, cartes ...)
+  [F000:0000]
+              Code du BIOS (demarrage en [F000:FFF0])
+  [F000:FFFF]
+
+Lorsque le test du materiel est termine, l'interruption logicielle 0x19 est
+appelee ; elle provoque l'execution du ``bootstrap loader'' (ou ``warm boot'').
+Ceci consiste a chercher si un secteur amorcable est present sur un media
+de la machine. Pour ceci, le premier secteur de 512 octets est charge depuis
+le media a l'adresse [07C0:0000], et s'il se termine par les deux octets
+0x55 et 0xAA, alors l'execution du code saute a l'adresse de chargement de ce
+secteur.
+
+Pour pouvoir fournir notre propre code a la machine nous devons donc
+fabriquer du code executable en mode reel, qui suppose etre charge a
+l'adresse [07C0:0000]. Il faudra alors le copier sur les 512 premiers
+octets d'une disquette en s'assurant que les deux derniers octets
+correspondent bien a la signature 0x55 0xAA.
+
+Le makefile fourni ici fabrique une image de disquette ``floppy.img'' ou
+une image de cdrom ``cdrom.iso'' a partir du fichier ``boot.asm''.
+Ces image pourront servir directement a l'emulateur QEMU
+  (commande ``make run'')
+ou bien devront etre inscrites sur une vraie disquette
+  (commande ``dd if=floppy.img of=/dev/fd0'')
+ou un CD
+  ( commande ``cdrecord dev=/dev/cdrom cdrom.img'')
+ou un DVD
+  (commande ``growisofs -dvd-compat -Z /dev/dvd=cdrom.img'')
+afin d'etre utilisee dans une vraie machine.
+
+Puisque l'execution est toujours a ce stade en mode reel, nous pouvons
+ecrire du code qui utilise les services du BIOS (a travers les interruptions
+logicielles qu'il met a disposition). Ceci permet notamment d'utiliser
+le materiel qu'il reconnait (lecteurs de disques, carte graphique ...).
+Cependant nous ne pouvons pas faire grand chose puisque notre code
+et les donnees associees doivent tenir dans 510 octets seulement.
+
+==============================================================================
+Boot_1:
+-------
+
+Il s'agit ici de permettre le chargement d'un programme plus volumineux
+qui occupe donc plusieurs secteurs de la disquette. Notons a ce sujet qu'il
+n'y a aucun systeme de fichier sur la disquette generee (elle n'a besoin
+d'aucun formatage) ; celle-ci sera lue sequentiellement, secteur par secteur.
+
+Notre code se decompose dorenavant en deux parties :
+  - le ``boot-loader'' (ici boot.asm)
+  - le code ``utile'' que l'on souhaite faire executer (ici main.asm)
+Le boot-loader doit donc produire un premier secteur amorcable dont le
+code consiste a charger le code utile (les secteurs suivants de la disquette)
+et provoquer un branchement vers le code charge. Puisque nous sommes toujours
+en mode reel, nous beneficions des services du BIOS pour effectuer ce
+chargement.
+nb : le BIOS utile la designation CHS (Cylinder/Head/Sector) pour designer
+     les secteurs de disques et non la designation lineaire LBA (Logical
+     Block Addressing) ; il est donc necessaire d'effectuer la conversion.
+nb : la primitive BIOS permet de charger plusieurs secteurs contigus en
+     une seule fois, seulement l'ensemble ne doit pas exeder 64 KO ; il
+     est donc necessaire d'effectuer plusieurs conversions LBA->CHS pour
+     charger l'integralite d'un volume consequent.
+
+Pour des raisons de simplicite, nous chargeons le code utile juste a la suite
+du secteur de boot ([07C0:0000]+512); ainsi la position relative des secteurs
+sur la disquette est identique a celle leur projection en memoire.
+Le boot-loader doit connaitre la taille totale a charger ; ceci est facilite
+par le fait que le fichier source principal (main.asm) commence par inclure
+le boot-loader (boot.asm). L'assemblage a donc lieu en une seule etape, ce
+qui permet de calculer les adresses relatives des differents elements de
+l'ensemble.
+nb : pour qu'un secteur puisse etre charge par le BIOS, celui-ci doit
+     etre complet ; il faut donc veiller a ce que le dernier secteur
+     utilise soit rempli avec des donnees inutiles jusqu'a atteindre un
+     volume de 512 octets.
+
+A ce stade, nous pouvons executer un programme suffisament consequent en
+mode reel en beneficiant toujours des service du BIOS. Toutefois, l'adressage
+[segment:offset] en 16 bits est tres contraignant a mettre en oeuvre pour
+utiliser l'integralite du premier MO. De plus il ne permet pas d'exploiter
+la memoire dont nous disposons au dela.
+
+==============================================================================
+Boot_2:
+-------
+
+Il s'agit ici de disposer d'un mode d'adressage lineaire (en apparence) sur
+32 bits, permettant ainsi d'exploiter toute la memoire disponible, tout en
+gardant la possibilite d'utiliser les services du BIOS.
+Ce mode d'adressage est souvent designe par ``unreal'' ou ``flat-real''.
+
+Pour ceci il faut passer temporairement en mode protege (i80386 ou superieur)
+pour ajuster les proprietes des segments puis revenir en mode reel.
+En effet, en mode protege les registres de segment ne designent pas
+une adresse mais un ``descripteur''. Un tel descripteur fait reference
+a une structure de donnees qui decrit notamment l'emplacement et l'etendue
+d'une zone memoire, ses droits d'acces (lecture, ecriture, execution) ...
+Lors du chargement d'un tel descripteur dans un registre de segment, le
+processeur memorise ces proprietes ; lorsqu'on repasse en mode reel, les
+proprietes des registres de segment sont conservees bien qu'ils designent
+a nouveau des adresses. Ainsi, si en mode protege on autorise les registres
+de segment a couvrir l'espace de 32 bits, alors de retour en mode reel,
+l'utilisation d'un offset de 32 bits au sein d'un segment est autorise
+(ce n'est pas le cas initialement). Dans notre exemple, cette operation
+est effectuee une fois pour toute par le boot-loader.
+nb : le traitement des interruptions est inhibe durant cette phase puisque
+     le comportement serait indetermine si une interruption devait etre
+     traitee par le BIOS alors que le processeur est en mode protege.
+
+Dans ces nouvelles conditions, il suffit de mettre tous les registres de
+segment a 0x0000 et de ne plus s'interesser qu'aux offset lors des operations
+d'adressage ; la programmation est simplifie et l'integralite de la
+memoire est accessible. Il est remarquable de constater que les services
+du BIOS sont toujours utilisables a condition qu'ils manipulent des
+adresses situees dans le premier MO. Cependant, bien que des operations
+d'adressage sur 32 bits puissent avoir lieu, l'integralite du code doit
+toujours avoir lieu en 16 bits. Nous avons gagne legerement en confort mais
+il est toujours necessaire de programmer entierement en assembleur (les
+compilateurs usuels ne generent pas de code a mi-chemin entre 16 et 32 bits).
+Aucun mecanisme de protection n'est envisageable puisque nous sommes
+toujours fondamentalement en mode reel.
+
+==============================================================================
+Boot_3:
+-------
+
+Il s'agit ici de disposer d'un meilleur confort de programmation en utilisant
+le langage C.
+
+Le compilateur generera du code exclusivement 32 bits (afin d'utiliser
+l'integralite de la memoire disponible) ainsi nous devons faire fonctionner
+le processeur en mode protege. Les services du BIOS deviennent des lors
+inutilisables ! Ceci signifie que si l'utilisation d'un materiel quelconque
+(clavier, disque, cartes ...) est necessaire, il est faudra alors coder le
+driver approprie.
+
+Le fait de fonctionner en mode protege 32 bits permet d'utiliser un
+compilateur C classique pour generer le code, ce qui donne un grand
+confort de programmation. Toutefois certaines portions sensibles devront
+etre ecrites en assembleur. La majeure partie du code assembleur se trouve
+des fichiers sources classiques destines a NASM et quelques bribes sont
+inserees ``inline'' dans le code C (platform.h). Dans ce dernier cas, la
+syntaxe utilisee n'est pas celle de NASM mais celle de l'assembleur ``as''
+utilise par la chaine de developpement gcc.
+
+Le boot-loader (boot.asm) est tres similaire aux precedents a l'exception
+du fait qu'il est realise independamment du reste du code ; il doit donc
+recevoir (par la ligne de commande de NASM) la taille et l'adresse de
+chargement du reste du code. Le code n'est pas systematiquement charge
+a la suite de [07C0:0000] car cela gaspillerait l'espace libre qui precede.
+Le code commence donc par deplacer le code du boot-loader de [07C00:0000]
+vers une adresse plus basse et poursuit son execution a cet endroit afin
+d'eviter d'etre ecrase par le code charge alors qu'il est encore en cours
+d'execution.
+nb : il se peut que le code en question soit deja dans la memoire cache
+     du processeur, et donc que l'ecrasement de cet zone memoire soit
+     sans effet sur le deroulement des operations, mais il est risque
+     de le supposer systematiquement.
+Le BIOS est utilise pour choisir le mode graphique et pour charger les
+secteurs suivant a l'adresse indiquee par la ligne de commande. Le
+processeur passe enfin en mode protege (le traitement des interruptions
+est inhibe a partir de ce moment), avec des descripteurs de segment
+permettant de couvrir l'espace 32 bits, avant de provoquer un branchement
+vers le code charge a l'adresse indiquee.
+nb : la pile est creee juste au dessous de la memoire graphique minimisant
+     ainsi le risque de collision avec les segments charges depuis la
+     disquette ; en cas de code tres volumineux (>600 K0) cette solution
+     simpliste de placement en memoire serait a revoir.
+
+Le code utile comporte un fichier source de demarrage en assembleur
+(start.asm), ainsi que des codes sources en C (*.c, *.h).
+La compilation de ces fichiers suit une demarche tout a fait classique
+de compilation separee et d'edition de liens. Seulement, ici nous ne
+pouvons disposer des bibliotheques standard du C (disponibles uniquement
+pour le systeme hote, voir les options de compilation du makefile).
+L'editeur de liens doit etre personnalise par un script (linker.ld)
+afin qu'il genere un fichier binaire qui convienne a notre mode de
+chargement et d'execution (et non pas a celui du systeme hote). L'editeur de
+liens a ici pour consigne de placer le segment de code, et notamment la
+fonction __start (start.asm) a l'adresse de chargement que nous avons choisie.
+En effet, le boot-loader se branche ``aveuglement'' a cette
+adresse, il faut donc s'assurer que le code vise s'y trouve bien.
+Le code et les donnees generes par le compilateur et l'assembleur sont
+places dans des sections selon leur role ; le script de l'editeur de lien
+doit donc collecter ces sections et les placer d'une facon qui nous
+convienne.
+
+La partie applicative (ecrite en C) de notre code doit necessairement definir
+une fonction ``mainCode()'' qui represente notre programme principal. Elle
+doit egalement definir une fonction ``interruptHandler()'' qui sert a reagir
+a la survenue d'une interruption.
+
+Pour que ces derniers points soient possibles, le code de demarrage (ecrit en
+assembleur) doit initialiser les controleurs d'interruptions materielles et
+renseigner une table de descripteurs d'interruption designant notamment les
+fonctions de rappel a declencher. Ces fonctions de rappel sauvegardent les
+registres sur la pile, appellent le traitement applicatif, aquittent si
+necessaire le controleur d'interruptions et restorent les registres depuis
+la pile afin que le traitement interrompu puisse se poursuivre sans
+perturbation.
+
+Le code applicatif a une forme tout a fait classique si ce n'est le fait
+qu'on ne dispose pas de bibliotheque standard. Quelques fonctionnalites
+d'usage courant ont ete reproduites (utils.c) et notamment un mecanisme
+simpliste d'allocation dynamique (liste chainee). La quantite de memoire
+disponible est donnee explicitement sur la ligne de commande de NASM
+(start.asm) afin de renseigner des variables globales designant les adresses
+de debut et de fin de la zone de memoire exploitable (difficile a determiner
+automatiquement). Ces variables globales peuvent alors etre exploitees par
+notre mecanisme d'allocation dynamique. Le decompte du temps a lieu en
+programmant une horloge et en interceptant ses interruptions (timer.c).
+La prise en compte du clavier consiste a interroger le controleur de
+clavier lorsqu'il leve une interruption (keyboard.c). L'affichage a l'ecran
+revient simplement a acceder a la memoire video (txtScreen.h).
+
+
+==============================================================================
+PoorOS:
+-------
+
+Nous nous dirigeons dorenavant vers la realisation d'un systeme d'exploitation
+minimal ; il ne s'agit plus de faire executer a l'ordinateur qu'une seule et
+unique tache.  Bien entendu nous resterons tres loin d'un systeme digne de ce
+nom ...  (d'ou le nom choisi ici : Poor OS ;^)
+
+Le code utile comporte un fichier source de demarrage en assembleur
+(PoorOS/start.asm), le code source en C++ du systeme (PoorOs/*.cpp, namespace
+PoorOS), et un (ou plusieurs) fichier(s) applicatif(s) servant a
+personnaliser le systeme pour qu'il effectue les traitement souhaites.
+Le choix de C++ a ete fait ici dans le but de faciliter le test de
+differentes solutions par simple surdefinition des classes ; ce choix
+n'est pas necessairement le meilleur pour la realisation d'un OS d'une
+maniere generale.
+
+Le script destine a l'editeur de liens (PoorOS/linker.ld) est semblable
+au precedent mais contient des informations specifiques a C++.
+En particulier, les fonctions de construction et de destruction des
+variables globales sont collectees afin d'etre invoquees avant et apres
+le programme principal.
+
+La partie applicative doit necessairement definir une classe derivee de la
+classe ``System'' fournie et s'en servir pour instantier la variable statique
+``System::theSystem''. Le code de demarrage (start.asm) a pour role essentiel
+l'invocation de la methode ``main()'' de cet objet comme traitement principal
+du systeme. Il invoque egalement la methode ``_interruptHandler()'' de ce
+meme objet pour qu'il reagisse aux diverses interruptions.
+
+Le multi-tache mis en oeuvre utilise la technique ``stack-swap''.
+Le principe repose sur le fait que lors d'une interruption on sauvegarde
+sur la pile tous les registres du traitement interrompu afin de les restituer
+a la fin de l'interruption. Si au lieu de restituer ce qui a ete sauvegarde
+en entree, nous modifions le registre de pile, alors nous restituons le
+contenu d'une autre pile, l'execution reprend dans l'etat decrit par cette
+autre pile. Il suffit donc de creer autant de piles distinctes que de taches
+et de profiter d'une interruption materielle (timer par exemple) ou logicielle
+(appel systeme) pour permutter les piles.
+
+A implementer :
+  - plus d'utilitaires (listes, vecteurs, chaines ...)
+  - la synchronisation (mutex, files d'attente ...)
+  - la protection memoire
+  - un file-system (acces au peripherique ?)
+
+==============================================================================
